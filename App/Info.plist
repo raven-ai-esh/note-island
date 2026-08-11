@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ru</string>
+    <key>CFBundleExecutable</key>
+    <string>NoteIsland</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.raven.note-island</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Note Island</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Note Island показывает ваши встречи на сегодня. Приложение не создаёт, не изменяет и не удаляет события календаря.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Note Island использует микрофон только во время запущенной вами аудио- или экранной записи.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Note Island записывает системный звук только во время запущенной вами аудио- или экранной записи.</string>
+</dict>
+</plist>
