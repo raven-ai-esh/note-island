@@ -257,6 +257,79 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange(), selection)
     }
 
+    func testDraggingSelectionWithinParagraphDoesNotRepeatedlyRestyleMarkdown() {
+        let source = "Первый **абзац** для выделения\nВторой [абзац](https://example.com)"
+        let textView = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 160))
+        let coordinator = SynchronousTextView.Coordinator(
+            text: .constant(source),
+            isEditing: .constant(true),
+            rendersMarkdown: true
+        )
+        textView.delegate = coordinator
+        textView.layoutManager?.delegate = coordinator
+        textView.string = source
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        coordinator.refreshMarkdown(in: textView)
+        let initialApplications = coordinator.markdownApplicationCount
+        for length in 1...20 {
+            textView.setSelectedRange(NSRange(location: 2, length: length))
+            coordinator.textViewDidChangeSelection(
+                Notification(name: NSTextView.didChangeSelectionNotification, object: textView)
+            )
+        }
+
+        XCTAssertEqual(coordinator.markdownApplicationCount, initialApplications)
+
+        let secondParagraph = (source as NSString).range(of: "Второй").location
+        textView.setSelectedRange(NSRange(location: secondParagraph, length: 3))
+        coordinator.textViewDidChangeSelection(
+            Notification(name: NSTextView.didChangeSelectionNotification, object: textView)
+        )
+        XCTAssertEqual(coordinator.markdownApplicationCount, initialApplications + 1)
+    }
+
+    func testUnrelatedViewUpdatePreservesMarkdownColorsWithoutRestyling() throws {
+        let source = "Открыть [документацию](https://example.com)"
+        let textView = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 100))
+        let coordinator = SynchronousTextView.Coordinator(
+            text: .constant(source),
+            isEditing: .constant(false),
+            rendersMarkdown: true
+        )
+        textView.delegate = coordinator
+        textView.string = source
+        coordinator.refreshMarkdown(in: textView, revealActiveParagraph: false)
+        let linkLocation = (source as NSString).range(of: "документацию").location
+        let colorBefore = try XCTUnwrap(
+            textView.textStorage?.attribute(.foregroundColor, at: linkLocation, effectiveRange: nil) as? NSColor
+        )
+        let initialApplications = coordinator.markdownApplicationCount
+
+        SynchronousTextView.synchronizePresentation(
+            in: textView,
+            coordinator: coordinator,
+            displayText: source,
+            isEditing: true,
+            rendersMarkdown: true
+        )
+
+        let colorAfter = try XCTUnwrap(
+            textView.textStorage?.attribute(.foregroundColor, at: linkLocation, effectiveRange: nil) as? NSColor
+        )
+        XCTAssertEqual(colorAfter, colorBefore)
+        XCTAssertNotEqual(colorAfter, NSColor.white.withAlphaComponent(0.88))
+        XCTAssertEqual(coordinator.markdownApplicationCount, initialApplications)
+    }
+
     func testIncompleteMarkdownStaysEditableAndRepeatedStylingIsStable() throws {
         let source = "#\nНезакрытые **жирный и `код"
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))

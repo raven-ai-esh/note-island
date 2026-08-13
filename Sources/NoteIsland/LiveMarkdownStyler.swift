@@ -60,11 +60,14 @@ enum LiveMarkdownStyler {
         storage.endEditing()
 
         textView.typingAttributes = typingAttributes
-        textView.selectedRanges = selections.map { value in
+        let normalizedSelections = selections.map { value in
             let range = value.rangeValue
             let location = min(range.location, storage.length)
             let length = min(range.length, storage.length - location)
             return NSValue(range: NSRange(location: location, length: length))
+        }
+        if textView.selectedRanges.map(\.rangeValue) != normalizedSelections.map(\.rangeValue) {
+            textView.selectedRanges = normalizedSelections
         }
         if storage.length > 0 {
             textView.layoutManager?.invalidateGlyphs(

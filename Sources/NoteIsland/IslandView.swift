@@ -445,18 +445,14 @@ struct SynchronousTextView: NSViewRepresentable {
         context.coordinator.isEditing = $isEditing
         context.coordinator.rendersMarkdown = rendersMarkdown
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        textView.layoutManager?.delegate = rendersMarkdown ? context.coordinator : nil
         let displayText = context.coordinator.displayText(for: text)
-        if textView.string != displayText {
-            textView.string = displayText
-        }
-        if !textView.hasMarkedText() {
-            textView.textColor = Self.resolvedTextColor(
-                isEditing: isEditing,
-                rendersMarkdown: rendersMarkdown
-            )
-            context.coordinator.refreshMarkdown(in: textView)
-        }
+        Self.synchronizePresentation(
+            in: textView,
+            coordinator: context.coordinator,
+            displayText: displayText,
+            isEditing: isEditing,
+            rendersMarkdown: rendersMarkdown
+        )
         context.coordinator.applyFocusRequest(
             focusRequestID,
             to: textView,
@@ -465,14 +461,47 @@ struct SynchronousTextView: NSViewRepresentable {
         )
     }
 
+    static func synchronizePresentation(
+        in textView: NSTextView,
+        coordinator: Coordinator,
+        displayText: String,
+        isEditing: Bool,
+        rendersMarkdown: Bool
+    ) {
+        textView.layoutManager?.delegate = rendersMarkdown ? coordinator : nil
+        if textView.string != displayText {
+            textView.string = displayText
+            coordinator.invalidateMarkdownPresentation()
+        }
+        guard !textView.hasMarkedText() else { return }
+        if !rendersMarkdown {
+            textView.textColor = resolvedTextColor(
+                isEditing: isEditing,
+                rendersMarkdown: false
+            )
+        }
+        coordinator.refreshMarkdown(in: textView)
+    }
+
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate, @preconcurrency NSLayoutManagerDelegate {
         var text: Binding<String>
         var isEditing: Binding<Bool>
-        var rendersMarkdown: Bool
+        var rendersMarkdown: Bool {
+            didSet {
+                if oldValue != rendersMarkdown { invalidateMarkdownPresentation() }
+            }
+        }
+        private(set) var markdownApplicationCount = 0
         private var handledFocusRequestID = 0
         private var hasPendingAutomaticNewline = false
         private var isRefreshingMarkdown = false
+        private var lastMarkdownPresentation: MarkdownPresentation?
+
+        private struct MarkdownPresentation: Equatable {
+            let source: String
+            let activeParagraphRange: NSRange?
+        }
 
         init(text: Binding<String>, isEditing: Binding<Bool>, rendersMarkdown: Bool) {
             self.text = text
@@ -523,7 +552,7 @@ struct SynchronousTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             hasPendingAutomaticNewline = false
             let hasMarkedText = textView.hasMarkedText()
-            if !hasMarkedText {
+            if !hasMarkedText, !rendersMarkdown {
                 textView.textColor = NSColor.white.withAlphaComponent(0.88)
             }
             isEditing.wrappedValue = true
@@ -540,15 +569,26 @@ struct SynchronousTextView: NSViewRepresentable {
             guard rendersMarkdown,
                   !textView.hasMarkedText(),
                   !isRefreshingMarkdown else { return }
-            isRefreshingMarkdown = true
-            defer { isRefreshingMarkdown = false }
             let activeParagraph = revealActiveParagraph
                 ? activeParagraphRange(in: textView)
                 : nil
+            let presentation = MarkdownPresentation(
+                source: textView.string,
+                activeParagraphRange: activeParagraph
+            )
+            guard presentation != lastMarkdownPresentation else { return }
+            lastMarkdownPresentation = presentation
+            isRefreshingMarkdown = true
+            defer { isRefreshingMarkdown = false }
             LiveMarkdownStyler.apply(
                 to: textView,
                 activeParagraphRange: activeParagraph
             )
+            markdownApplicationCount += 1
+        }
+
+        func invalidateMarkdownPresentation() {
+            lastMarkdownPresentation = nil
         }
 
         private func activeParagraphRange(in textView: NSTextView) -> NSRange? {
