@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+@preconcurrency import UserNotifications
 
 @main
 struct NoteIslandApp: App {
@@ -19,11 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        UNUserNotificationCenter.current().delegate = self
 
         let controller = IslandPanelController()
         islandController = controller
         configureStatusItem(controller: controller)
         controller.show(expanded: false)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        islandController?.refreshMeetingNotificationAuthorization()
     }
 
     private func configureStatusItem(controller: IslandPanelController) {
@@ -74,5 +80,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showScreenshots() {
         islandController?.show(mode: .screenshots)
+    }
+}
+
+extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        await MainActor.run {
+            islandController?.show(mode: .meetings)
+        }
     }
 }

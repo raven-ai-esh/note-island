@@ -321,19 +321,40 @@ final class MeetingsStore: ObservableObject {
     @Published private(set) var state: MeetingsViewState = .idle
     @Published private(set) var meetings: [MeetingItem] = []
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var notificationsEnabled: Bool
+    @Published private(set) var notificationState: MeetingNotificationState
 
     private let provider: CalendarEventProviding
     private let calendar: Calendar
+    private let notificationScheduler: MeetingNotificationScheduling
+    private let notificationPreference: MeetingNotificationPreferenceStoring
+    private let now: () -> Date
     private var isActive = false
     private var isLoading = false
 
-    init(provider: CalendarEventProviding = EventKitCalendarProvider(), calendar: Calendar = .autoupdatingCurrent) {
+    init(
+        provider: CalendarEventProviding = EventKitCalendarProvider(),
+        calendar: Calendar = .autoupdatingCurrent,
+        notificationScheduler: MeetingNotificationScheduling = InertMeetingNotificationScheduler(),
+        notificationPreference: MeetingNotificationPreferenceStoring = TransientMeetingNotificationPreference(),
+        now: @escaping () -> Date = Date.init
+    ) {
         self.provider = provider
         self.calendar = calendar
+        self.notificationScheduler = notificationScheduler
+        self.notificationPreference = notificationPreference
+        self.now = now
+        notificationsEnabled = notificationPreference.isEnabled
+        notificationState = notificationPreference.isEnabled ? .enabling : .disabled
         provider.observeChanges { [weak self] in
-            guard let self, self.isActive else { return }
-            self.refresh()
+            guard let self else { return }
+            if self.isActive {
+                self.refresh()
+            } else if self.notificationsEnabled {
+                self.synchronizeScheduledNotifications()
+            }
         }
+        restoreNotificationPreference()
     }
 
     func activate() {
@@ -361,6 +382,44 @@ final class MeetingsStore: ObservableObject {
         load(requestAccessIfNeeded: false)
     }
 
+    func toggleNotifications() {
+        guard notificationState != .enabling else { return }
+        if notificationsEnabled {
+            notificationsEnabled = false
+            notificationPreference.isEnabled = false
+            notificationState = .disabled
+            notificationScheduler.cancelAll()
+            return
+        }
+        enableNotifications()
+    }
+
+    func refreshNotificationAuthorization(onStillDenied: (() -> Void)? = nil) {
+        guard notificationsEnabled || notificationState == .denied else { return }
+        notificationScheduler.getAuthorizationStatus { [weak self] authorization in
+            guard let self else { return }
+            switch authorization {
+            case .authorized where !self.notificationsEnabled:
+                self.finishEnablingNotifications(
+                    includeMeetingsInsideLeadWindow: onStillDenied != nil
+                )
+            case .authorized:
+                break
+            case .denied:
+                self.notificationsEnabled = false
+                self.notificationPreference.isEnabled = false
+                self.notificationState = .denied
+                self.notificationScheduler.cancelAll()
+                onStillDenied?()
+            case .notDetermined:
+                self.notificationsEnabled = false
+                self.notificationPreference.isEnabled = false
+                self.notificationState = .disabled
+                self.notificationScheduler.cancelAll()
+            }
+        }
+    }
+
     private func load(requestAccessIfNeeded: Bool) {
         guard !isLoading else { return }
         switch provider.accessState {
@@ -373,9 +432,11 @@ final class MeetingsStore: ObservableObject {
         case .denied, .writeOnly:
             meetings = []
             state = .denied
+            if notificationsEnabled { notificationScheduler.cancelAll() }
         case .restricted:
             meetings = []
             state = .restricted
+            if notificationsEnabled { notificationScheduler.cancelAll() }
         }
     }
 
@@ -411,10 +472,108 @@ final class MeetingsStore: ObservableObject {
             meetings = try provider.events(from: start, through: end)
             lastUpdated = now
             state = .ready
+            if notificationsEnabled { synchronizeScheduledNotifications() }
         } catch {
             state = .failed(error.localizedDescription)
         }
         isLoading = false
+    }
+
+    private func enableNotifications() {
+        notificationState = .enabling
+        notificationScheduler.getAuthorizationStatus { [weak self] authorization in
+            guard let self else { return }
+            switch authorization {
+            case .authorized:
+                self.finishEnablingNotifications()
+            case .notDetermined:
+                self.notificationScheduler.requestAuthorization { [weak self] result in
+                    guard let self else { return }
+                    switch result {
+                    case .success(true):
+                        self.finishEnablingNotifications()
+                    case .success(false):
+                        self.notificationsEnabled = false
+                        self.notificationPreference.isEnabled = false
+                        self.notificationState = .denied
+                        self.notificationScheduler.cancelAll()
+                    case .failure(let error):
+                        self.notificationsEnabled = false
+                        self.notificationPreference.isEnabled = false
+                        self.notificationState = .failed(error.localizedDescription)
+                        self.notificationScheduler.cancelAll()
+                    }
+                }
+            case .denied:
+                self.notificationsEnabled = false
+                self.notificationPreference.isEnabled = false
+                self.notificationState = .denied
+                self.notificationScheduler.cancelAll()
+            }
+        }
+    }
+
+    private func finishEnablingNotifications(
+        includeMeetingsInsideLeadWindow: Bool = true
+    ) {
+        notificationsEnabled = true
+        notificationPreference.isEnabled = true
+        notificationState = .enabled
+        synchronizeScheduledNotifications(
+            includeMeetingsInsideLeadWindow: includeMeetingsInsideLeadWindow
+        )
+    }
+
+    private func restoreNotificationPreference() {
+        guard notificationsEnabled else { return }
+        notificationScheduler.getAuthorizationStatus { [weak self] authorization in
+            guard let self else { return }
+            switch authorization {
+            case .authorized:
+                self.notificationState = .enabled
+                self.synchronizeScheduledNotifications()
+            case .notDetermined:
+                self.notificationsEnabled = false
+                self.notificationPreference.isEnabled = false
+                self.notificationState = .disabled
+                self.notificationScheduler.cancelAll()
+            case .denied:
+                self.notificationsEnabled = false
+                self.notificationPreference.isEnabled = false
+                self.notificationState = .denied
+                self.notificationScheduler.cancelAll()
+            }
+        }
+    }
+
+    private func synchronizeScheduledNotifications(
+        includeMeetingsInsideLeadWindow: Bool = false
+    ) {
+        guard notificationsEnabled else { return }
+        guard provider.accessState == .authorized else {
+            notificationScheduler.cancelAll()
+            return
+        }
+        let currentDate = now()
+        guard let horizon = calendar.date(byAdding: .day, value: 7, to: currentDate) else { return }
+        do {
+            let upcoming = try provider.events(from: currentDate, through: horizon)
+            let schedulable = includeMeetingsInsideLeadWindow ? upcoming : upcoming.filter {
+                $0.startDate.addingTimeInterval(-MeetingNotificationPlan.leadTime) > currentDate
+            }
+            let requests = MeetingNotificationPlan.requests(for: schedulable, now: currentDate)
+            notificationScheduler.replacePendingRequests(with: requests) { [weak self] result in
+                guard let self, self.notificationsEnabled else { return }
+                switch result {
+                case .success:
+                    self.notificationState = .enabled
+                case .failure(let error):
+                    self.notificationState = .failed(error.localizedDescription)
+                }
+            }
+        } catch {
+            notificationState = .failed(error.localizedDescription)
+        }
     }
 }
 

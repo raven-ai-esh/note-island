@@ -69,7 +69,10 @@ final class IslandPanelController: NSObject {
     override init() {
         store = NoteStore()
         translator = TranslatorStore()
-        meetings = MeetingsStore()
+        meetings = MeetingsStore(
+            notificationScheduler: SystemMeetingNotificationScheduler(),
+            notificationPreference: UserDefaultsMeetingNotificationPreference()
+        )
         recordings = RecordingsStore()
         screenshots = ScreenshotsStore()
         presentation = IslandPresentationState()
@@ -131,6 +134,10 @@ final class IslandPanelController: NSObject {
         } else {
             show(mode: mode)
         }
+    }
+
+    func refreshMeetingNotificationAuthorization() {
+        meetings.refreshNotificationAuthorization()
     }
 
     private func configurePanel() {

@@ -144,6 +144,29 @@ struct MeetingsView: View {
                     .foregroundStyle(IslandTheme.secondary)
             }
             Button {
+                if meetings.notificationState == .denied {
+                    meetings.refreshNotificationAuthorization(
+                        onStillDenied: openNotificationPrivacySettings
+                    )
+                } else {
+                    meetings.toggleNotifications()
+                }
+            } label: {
+                if meetings.notificationState == .enabling {
+                    ProgressView().controlSize(.small)
+                        .frame(width: 26, height: 26)
+                } else {
+                    Image(systemName: MeetingNotificationControl.symbolName(
+                        enabled: meetings.notificationsEnabled
+                    ))
+                    .frame(width: 26, height: 26)
+                }
+            }
+            .buttonStyle(IslandIconButtonStyle())
+            .foregroundStyle(notificationControlColor)
+            .accessibilityLabel(notificationControlLabel)
+            .help(notificationControlHelp)
+            Button {
                 meetings.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
@@ -155,6 +178,30 @@ struct MeetingsView: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
+    }
+
+    private var notificationControlColor: Color {
+        switch meetings.notificationState {
+        case .enabled: NoteColor.mint.color
+        case .denied, .failed: NoteColor.peach.color
+        default: IslandTheme.secondary
+        }
+    }
+
+    private var notificationControlLabel: String {
+        if meetings.notificationsEnabled { return "Выключить уведомления о встречах" }
+        if meetings.notificationState == .denied { return "Открыть настройки уведомлений" }
+        return "Включить уведомления о встречах"
+    }
+
+    private var notificationControlHelp: String {
+        switch meetings.notificationState {
+        case .enabled: "Уведомления за 10 минут до встречи включены"
+        case .enabling: "Включаем уведомления…"
+        case .denied: "Уведомления запрещены в настройках macOS"
+        case .failed(let message): message
+        case .disabled: "Уведомления о встречах выключены"
+        }
     }
 
     @ViewBuilder
@@ -287,6 +334,11 @@ struct MeetingsView: View {
 
     private func openCalendarPrivacySettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openNotificationPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
         NSWorkspace.shared.open(url)
     }
 

@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 @preconcurrency import EventKit
 import SwiftUI
+@preconcurrency import UserNotifications
 import XCTest
 @testable import NoteIsland
 
@@ -123,6 +124,361 @@ final class MeetingsStoreTests: XCTestCase {
         store.deactivate()
         provider.sendCalendarChange()
         XCTAssertEqual(provider.fetchCount, 2)
+    }
+
+    func testEnablingNotificationsSchedulesUpcomingMeetingsTenMinutesBeforeStart() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([
+            meeting(id: "upcoming", title: "Дейли", start: now.addingTimeInterval(3_600)),
+            meeting(id: "past", title: "Прошедшая", start: now.addingTimeInterval(-3_600)),
+            meeting(id: "all-day", title: "Весь день", start: now.addingTimeInterval(1_800), isAllDay: true)
+        ])
+        let notifications = TestMeetingNotificationScheduler()
+        let preference = TestMeetingNotificationPreference()
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference,
+            now: { now }
+        )
+
+        store.toggleNotifications()
+
+        XCTAssertEqual(notifications.requestAuthorizationCount, 1)
+        XCTAssertTrue(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .enabled)
+        XCTAssertTrue(preference.isEnabled)
+        let request = try XCTUnwrap(notifications.replacedRequests.only)
+        XCTAssertEqual(request.meetingID, "upcoming")
+        XCTAssertEqual(request.fireDate, now.addingTimeInterval(3_000))
+        XCTAssertEqual(request.title, "Скоро: Дейли")
+        XCTAssertEqual(provider.fetchCount, 1)
+    }
+
+    func testNotificationInsideLeadWindowIsScheduledImmediatelyInsteadOfDropped() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let request = try XCTUnwrap(MeetingNotificationPlan.requests(
+            for: [meeting(id: "soon", title: "Скоро", start: now.addingTimeInterval(120))],
+            now: now
+        ).only)
+
+        XCTAssertEqual(request.fireDate, now.addingTimeInterval(1))
+    }
+
+    func testRestoringEnabledModeDoesNotRepeatImmediateReminderInsideLeadWindow() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([
+            meeting(id: "soon", title: "Уже напомнили", start: now.addingTimeInterval(120))
+        ])
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.authorizationStatus = .authorized
+
+        _ = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: TestMeetingNotificationPreference(isEnabled: true),
+            now: { now }
+        )
+
+        XCTAssertEqual(notifications.replaceCount, 1)
+        XCTAssertTrue(notifications.replacedRequests.isEmpty)
+    }
+
+    func testDeniedNotificationPermissionKeepsModeOffAndSchedulesNothing() {
+        let provider = TestCalendarProvider()
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.requestAuthorizationResult = .success(false)
+        let preference = TestMeetingNotificationPreference()
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference
+        )
+
+        store.toggleNotifications()
+
+        XCTAssertFalse(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .denied)
+        XCTAssertFalse(preference.isEnabled)
+        XCTAssertEqual(notifications.replaceCount, 0)
+    }
+
+    func testDisablingNotificationsCancelsEveryPendingMeetingReminder() {
+        let provider = TestCalendarProvider()
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.authorizationStatus = .authorized
+        let preference = TestMeetingNotificationPreference(isEnabled: true)
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference
+        )
+        XCTAssertTrue(store.notificationsEnabled)
+
+        store.toggleNotifications()
+
+        XCTAssertFalse(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .disabled)
+        XCTAssertFalse(preference.isEnabled)
+        XCTAssertEqual(notifications.cancelCount, 1)
+    }
+
+    func testLateAddCompletionAfterCancellationRemovesTheOrphanedRequest() throws {
+        let client = ControllableMeetingNotificationCenterClient()
+        let scheduler = SystemMeetingNotificationScheduler(client: client)
+        let request = try XCTUnwrap(MeetingNotificationPlan.requests(
+            for: [meeting(
+                id: "late-add",
+                title: "Позднее добавление",
+                start: Date(timeIntervalSince1970: 1_800_003_600)
+            )],
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        ).only)
+
+        scheduler.replacePendingRequests(with: [request]) { _ in }
+        client.completePendingLookup(at: 0, identifiers: [])
+        let submittedIdentifier = try XCTUnwrap(client.submittedRequests.only?.request.identifier)
+
+        scheduler.cancelAll()
+        client.completePendingLookup(at: 1, identifiers: [])
+        client.completeAdd(at: 0, error: nil)
+
+        XCTAssertTrue(client.removedIdentifierBatches.contains([submittedIdentifier]))
+    }
+
+    func testStaleCancellationCannotRemoveRequestsFromAReplacementOperation() throws {
+        let client = ControllableMeetingNotificationCenterClient()
+        let scheduler = SystemMeetingNotificationScheduler(client: client)
+        let request = try XCTUnwrap(MeetingNotificationPlan.requests(
+            for: [meeting(
+                id: "replacement",
+                title: "Новая версия",
+                start: Date(timeIntervalSince1970: 1_800_003_600)
+            )],
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        ).only)
+
+        scheduler.cancelAll()
+        scheduler.replacePendingRequests(with: [request]) { _ in }
+        client.completePendingLookup(at: 1, identifiers: [])
+        let replacementIdentifier = try XCTUnwrap(client.submittedRequests.only?.request.identifier)
+        client.completeAdd(at: 0, error: nil)
+
+        client.completePendingLookup(at: 0, identifiers: [replacementIdentifier])
+
+        XCTAssertFalse(client.removedIdentifierBatches.contains { $0.contains(replacementIdentifier) })
+    }
+
+    func testCalendarChangeRefreshesNotificationsWhileMeetingTabIsClosed() {
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([sampleMeeting(title: "Изменяемая")])
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.authorizationStatus = .authorized
+        let preference = TestMeetingNotificationPreference(isEnabled: true)
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference
+        )
+        XCTAssertTrue(store.notificationsEnabled)
+        XCTAssertEqual(provider.fetchCount, 1)
+
+        provider.sendCalendarChange()
+
+        XCTAssertEqual(provider.fetchCount, 2)
+        XCTAssertEqual(notifications.replaceCount, 2)
+    }
+
+    func testNotificationSchedulingFailureStaysVisibleAndCalendarChangeRetries() {
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([sampleMeeting(title: "Повтор")])
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.replaceResult = .failure(TestNotificationError.schedulingFailed)
+        let preference = TestMeetingNotificationPreference()
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference
+        )
+
+        store.toggleNotifications()
+        XCTAssertTrue(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .failed("Не удалось запланировать уведомление"))
+
+        notifications.replaceResult = .success(())
+        provider.sendCalendarChange()
+
+        XCTAssertEqual(store.notificationState, .enabled)
+        XCTAssertEqual(notifications.replaceCount, 2)
+    }
+
+    func testRepeatedClickWhileNotificationPermissionIsPendingDoesNotDuplicateRequest() {
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.completesAuthorizationAutomatically = false
+        let store = MeetingsStore(
+            provider: TestCalendarProvider(),
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: TestMeetingNotificationPreference()
+        )
+
+        store.toggleNotifications()
+        store.toggleNotifications()
+
+        XCTAssertEqual(store.notificationState, .enabling)
+        XCTAssertEqual(notifications.requestAuthorizationCount, 1)
+    }
+
+    func testReturningFromSystemSettingsReflectsExternalNotificationRevocation() {
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.authorizationStatus = .authorized
+        let preference = TestMeetingNotificationPreference(isEnabled: true)
+        let store = MeetingsStore(
+            provider: TestCalendarProvider(),
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference
+        )
+        XCTAssertTrue(store.notificationsEnabled)
+
+        notifications.authorizationStatus = .denied
+        store.refreshNotificationAuthorization()
+
+        XCTAssertFalse(store.notificationsEnabled)
+        XCTAssertFalse(preference.isEnabled)
+        XCTAssertEqual(store.notificationState, .denied)
+        XCTAssertEqual(notifications.cancelCount, 1)
+    }
+
+    func testDeniedControlRechecksSystemSettingsAndEnablesAfterExternalGrant() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([
+            meeting(id: "soon-explicit", title: "После разрешения", start: now.addingTimeInterval(120))
+        ])
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.requestAuthorizationResult = .success(false)
+        let preference = TestMeetingNotificationPreference()
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: preference,
+            now: { now }
+        )
+        store.toggleNotifications()
+        XCTAssertEqual(store.notificationState, .denied)
+
+        var openedSettings = false
+        notifications.authorizationStatus = .authorized
+        store.refreshNotificationAuthorization(onStillDenied: { openedSettings = true })
+
+        XCTAssertFalse(openedSettings)
+        XCTAssertTrue(store.notificationsEnabled)
+        XCTAssertTrue(preference.isEnabled)
+        XCTAssertEqual(store.notificationState, .enabled)
+        XCTAssertEqual(notifications.replaceCount, 1)
+        XCTAssertEqual(notifications.replacedRequests.only?.fireDate, now.addingTimeInterval(1))
+    }
+
+    func testAutomaticAuthorizationRefreshDoesNotRepeatImmediateReminderAfterExternalGrant() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = TestCalendarProvider()
+        provider.eventsResult = .success([
+            meeting(id: "soon-automatic", title: "Без дубля", start: now.addingTimeInterval(120))
+        ])
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.requestAuthorizationResult = .success(false)
+        let store = MeetingsStore(
+            provider: provider,
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: TestMeetingNotificationPreference(),
+            now: { now }
+        )
+        store.toggleNotifications()
+        XCTAssertEqual(store.notificationState, .denied)
+
+        notifications.authorizationStatus = .authorized
+        store.refreshNotificationAuthorization()
+
+        XCTAssertTrue(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .enabled)
+        XCTAssertEqual(notifications.replaceCount, 1)
+        XCTAssertTrue(notifications.replacedRequests.isEmpty)
+    }
+
+    func testDeniedControlOpensSettingsWhenPermissionIsStillDenied() {
+        let notifications = TestMeetingNotificationScheduler()
+        notifications.authorizationStatus = .denied
+        let store = MeetingsStore(
+            provider: TestCalendarProvider(),
+            calendar: fixedCalendar,
+            notificationScheduler: notifications,
+            notificationPreference: TestMeetingNotificationPreference()
+        )
+        store.toggleNotifications()
+
+        var openedSettings = false
+        store.refreshNotificationAuthorization(onStillDenied: { openedSettings = true })
+
+        XCTAssertTrue(openedSettings)
+        XCTAssertFalse(store.notificationsEnabled)
+        XCTAssertEqual(store.notificationState, .denied)
+    }
+
+    func testNotificationControlUsesBellAndSlashedBellForBothModes() {
+        XCTAssertEqual(MeetingNotificationControl.symbolName(enabled: true), "bell")
+        XCTAssertEqual(MeetingNotificationControl.symbolName(enabled: false), "bell.slash")
+    }
+
+    func testNotificationControlRendersDistinctOffEnablingAndOnHeaderStates() throws {
+        func readyProvider() -> TestCalendarProvider {
+            let provider = TestCalendarProvider()
+            provider.eventsResult = .success([])
+            return provider
+        }
+
+        let offStore = MeetingsStore(provider: readyProvider(), calendar: fixedCalendar)
+        offStore.activate()
+
+        let enablingScheduler = TestMeetingNotificationScheduler()
+        enablingScheduler.completesAuthorizationAutomatically = false
+        let enablingStore = MeetingsStore(
+            provider: readyProvider(),
+            calendar: fixedCalendar,
+            notificationScheduler: enablingScheduler,
+            notificationPreference: TestMeetingNotificationPreference()
+        )
+        enablingStore.activate()
+        enablingStore.toggleNotifications()
+
+        let enabledScheduler = TestMeetingNotificationScheduler()
+        enabledScheduler.authorizationStatus = .authorized
+        let enabledStore = MeetingsStore(
+            provider: readyProvider(),
+            calendar: fixedCalendar,
+            notificationScheduler: enabledScheduler,
+            notificationPreference: TestMeetingNotificationPreference(isEnabled: true)
+        )
+        enabledStore.activate()
+
+        let size = NSSize(width: 560, height: 330)
+        let off = try render(MeetingsView(meetings: offStore), size: size)
+        let enabling = try render(MeetingsView(meetings: enablingStore), size: size)
+        let enabled = try render(MeetingsView(meetings: enabledStore), size: size)
+
+        XCTAssertGreaterThan(headerPixelDifference(off, enabling), 20)
+        XCTAssertGreaterThan(headerPixelDifference(off, enabled), 20)
+        XCTAssertGreaterThan(headerPixelDifference(enabling, enabled), 20)
     }
 
     func testModeShortcutMetadataIsStable() {
@@ -401,6 +757,24 @@ final class MeetingsStoreTests: XCTestCase {
         )
     }
 
+    private func meeting(
+        id: String,
+        title: String,
+        start: Date,
+        isAllDay: Bool = false
+    ) -> MeetingItem {
+        MeetingItem(
+            id: id,
+            title: title,
+            startDate: start,
+            endDate: start.addingTimeInterval(1_800),
+            isAllDay: isAllDay,
+            location: nil,
+            calendarTitle: "Работа",
+            calendarColor: .fallback
+        )
+    }
+
     private func detailedMeeting() -> MeetingItem {
         MeetingItem(
             id: "detailed-meeting",
@@ -480,6 +854,139 @@ final class MeetingsStoreTests: XCTestCase {
             }
         }
         return count
+    }
+
+    private func headerPixelDifference(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
+        var count = 0
+        for x in 0..<min(lhs.pixelsWide, rhs.pixelsWide) {
+            for y in 0..<min(lhs.pixelsHigh, rhs.pixelsHigh) {
+                guard let left = lhs.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let right = rhs.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let delta = abs(left.redComponent - right.redComponent)
+                    + abs(left.greenComponent - right.greenComponent)
+                    + abs(left.blueComponent - right.blueComponent)
+                    + abs(left.alphaComponent - right.alphaComponent)
+                if delta > 0.12 { count += 1 }
+            }
+        }
+        return count
+    }
+}
+
+private extension Array {
+    var only: Element? { count == 1 ? first : nil }
+}
+
+private enum TestNotificationError: LocalizedError {
+    case schedulingFailed
+
+    var errorDescription: String? { "Не удалось запланировать уведомление" }
+}
+
+@MainActor
+private final class ControllableMeetingNotificationCenterClient: MeetingNotificationCenterClient {
+    struct SubmittedRequest {
+        let request: UNNotificationRequest
+        let completion: @MainActor @Sendable (Error?) -> Void
+    }
+
+    var authorizationStatus: MeetingNotificationAuthorization = .authorized
+    private(set) var pendingLookups: [(@MainActor @Sendable ([String]) -> Void)?] = []
+    private(set) var submittedRequests: [SubmittedRequest] = []
+    private(set) var removedIdentifierBatches: [[String]] = []
+
+    func getAuthorizationStatus(
+        _ completion: @escaping @MainActor @Sendable (MeetingNotificationAuthorization) -> Void
+    ) {
+        completion(authorizationStatus)
+    }
+
+    func requestAuthorization(
+        _ completion: @escaping @MainActor @Sendable (Result<Bool, Error>) -> Void
+    ) {
+        completion(.success(true))
+    }
+
+    func getPendingIdentifiers(
+        _ completion: @escaping @MainActor @Sendable ([String]) -> Void
+    ) {
+        pendingLookups.append(completion)
+    }
+
+    func add(
+        _ request: UNNotificationRequest,
+        completion: @escaping @MainActor @Sendable (Error?) -> Void
+    ) {
+        submittedRequests.append(SubmittedRequest(request: request, completion: completion))
+    }
+
+    func removePending(identifiers: [String]) {
+        removedIdentifierBatches.append(identifiers)
+    }
+
+    func completePendingLookup(at index: Int, identifiers: [String]) {
+        let completion = pendingLookups[index]
+        pendingLookups[index] = nil
+        completion?(identifiers)
+    }
+
+    func completeAdd(at index: Int, error: Error?) {
+        submittedRequests[index].completion(error)
+    }
+}
+
+@MainActor
+private final class TestMeetingNotificationScheduler: MeetingNotificationScheduling {
+    var authorizationStatus: MeetingNotificationAuthorization = .notDetermined
+    var requestAuthorizationResult: Result<Bool, Error> = .success(true)
+    var replaceResult: Result<Void, Error> = .success(())
+    var completesAuthorizationAutomatically = true
+    private(set) var requestAuthorizationCount = 0
+    private(set) var replaceCount = 0
+    private(set) var cancelCount = 0
+    private(set) var replacedRequests: [MeetingNotificationRequest] = []
+    private var authorizationCompletion: (@MainActor @Sendable (Result<Bool, Error>) -> Void)?
+
+    func getAuthorizationStatus(
+        _ completion: @escaping @MainActor @Sendable (MeetingNotificationAuthorization) -> Void
+    ) {
+        completion(authorizationStatus)
+    }
+
+    func requestAuthorization(
+        _ completion: @escaping @MainActor @Sendable (Result<Bool, Error>) -> Void
+    ) {
+        requestAuthorizationCount += 1
+        authorizationCompletion = completion
+        if completesAuthorizationAutomatically { completeAuthorization(requestAuthorizationResult) }
+    }
+
+    func completeAuthorization(_ result: Result<Bool, Error>) {
+        authorizationCompletion?(result)
+        authorizationCompletion = nil
+    }
+
+    func replacePendingRequests(
+        with requests: [MeetingNotificationRequest],
+        completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
+    ) {
+        replaceCount += 1
+        replacedRequests = requests
+        completion(replaceResult)
+    }
+
+    func cancelAll() {
+        cancelCount += 1
+        replacedRequests = []
+    }
+}
+
+@MainActor
+private final class TestMeetingNotificationPreference: MeetingNotificationPreferenceStoring {
+    var isEnabled: Bool
+
+    init(isEnabled: Bool = false) {
+        self.isEnabled = isEnabled
     }
 }
 
