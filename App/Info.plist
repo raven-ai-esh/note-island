@@ -8,6 +8,8 @@
     <string>NoteIsland</string>
     <key>CFBundleIdentifier</key>
     <string>dev.raven.note-island</string>
+    <key>CFBundleIconFile</key>
+    <string>NoteIsland.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

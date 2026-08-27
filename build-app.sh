@@ -15,6 +15,7 @@ swift build -c release
 mkdir -p "$contents_dir/MacOS" "$contents_dir/Resources"
 install -m 755 ".build/release/NoteIsland" "$contents_dir/MacOS/NoteIsland"
 install -m 644 "App/Info.plist" "$contents_dir/Info.plist"
+install -m 644 "App/NoteIsland.icns" "$contents_dir/Resources/NoteIsland.icns"
 
 xattr -cr "$staging_app"
 signing_identity=$(security find-identity -v -p codesigning \

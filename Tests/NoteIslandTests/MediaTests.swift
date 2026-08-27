@@ -302,6 +302,26 @@ final class SystemRecordingControllerTests: XCTestCase {
 
 @MainActor
 final class SystemAudioExporterTests: XCTestCase {
+    func testAppBundleDeclaresLoadableApplicationIcon() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let plistURL = packageRoot.appendingPathComponent("App/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        )
+        let iconName = try XCTUnwrap(plist["CFBundleIconFile"] as? String)
+        XCTAssertEqual(iconName, "NoteIsland.icns")
+
+        let iconURL = packageRoot.appendingPathComponent("App/NoteIsland.icns")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: iconURL.path))
+        let icon = try XCTUnwrap(NSImage(contentsOf: iconURL))
+        XCTAssertGreaterThanOrEqual(icon.size.width, 512)
+        XCTAssertGreaterThanOrEqual(icon.size.height, 512)
+    }
+
     func testPrivacyDescriptionsDiscloseSystemAudioInBothRecordingModes() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
