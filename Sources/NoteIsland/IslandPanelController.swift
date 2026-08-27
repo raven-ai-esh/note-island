@@ -24,6 +24,23 @@ enum IslandScreenGeometry {
     }
 }
 
+enum IslandExpandedGeometry {
+    static let defaultHeight: CGFloat = 388
+    static let minimumHeight: CGFloat = 280
+
+    static func maximumHeight(screenFrame: NSRect, visibleFrame: NSRect) -> CGFloat {
+        max(minimumHeight, screenFrame.maxY - visibleFrame.minY)
+    }
+
+    static func height(
+        startingAt startingHeight: CGFloat,
+        verticalTranslation: CGFloat,
+        maximumHeight: CGFloat
+    ) -> CGFloat {
+        min(max(startingHeight + verticalTranslation, minimumHeight), maximumHeight)
+    }
+}
+
 @MainActor
 final class IslandPresentationState: ObservableObject {
     @Published var isExpanded = false
@@ -31,6 +48,7 @@ final class IslandPresentationState: ObservableObject {
     @Published var editorOpacity: Double = 0
     @Published var topInset: CGFloat = 0
     @Published var compactWidth: CGFloat = IslandScreenGeometry.minimumCompactWidth
+    @Published var expandedHeight: CGFloat = IslandExpandedGeometry.defaultHeight
     @Published var bodyFocusRequestID = 0
     @Published var mode: IslandMode
 
@@ -161,7 +179,8 @@ final class IslandPanelController: NSObject {
             screenshots: screenshots,
             presentation: presentation,
             setExpanded: { [weak self] in self?.setExpanded($0) },
-            dismiss: { [weak self] in self?.hide() }
+            dismiss: { [weak self] in self?.hide() },
+            setExpandedHeight: { [weak self] in self?.setExpandedHeight($0) }
         )
         hostingView = NSHostingView(rootView: root)
         hostingView.wantsLayer = true
@@ -209,7 +228,7 @@ final class IslandPanelController: NSObject {
 
     private func resize(animated: Bool, completion: (@MainActor @Sendable () -> Void)? = nil) {
         let compactHeight = presentation.topInset > 0 ? presentation.topInset : 32
-        let height = expanded ? 388 : compactHeight
+        let height = expanded ? presentation.expandedHeight : compactHeight
         let size = NSSize(
             width: expanded ? 560 : presentation.compactWidth,
             height: height
@@ -253,6 +272,26 @@ final class IslandPanelController: NSObject {
             presentation.topInset = 0
             presentation.compactWidth = IslandScreenGeometry.compactWidth(notchWidth: nil)
         }
+        presentation.expandedHeight = min(
+            presentation.expandedHeight,
+            IslandExpandedGeometry.maximumHeight(
+                screenFrame: screen.frame,
+                visibleFrame: screen.visibleFrame
+            )
+        )
+    }
+
+    private func setExpandedHeight(_ proposedHeight: CGFloat) {
+        guard expanded else { return }
+        let screen = currentScreen ?? panel.screen ?? NSScreen.screens.first ?? NSScreen.main!
+        let maximumHeight = IslandExpandedGeometry.maximumHeight(
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame
+        )
+        let clampedHeight = min(max(proposedHeight, IslandExpandedGeometry.minimumHeight), maximumHeight)
+        guard abs(clampedHeight - presentation.expandedHeight) > 0.25 else { return }
+        presentation.expandedHeight = clampedHeight
+        resize(animated: false)
     }
 
     private func observePanelScreenChanges() {

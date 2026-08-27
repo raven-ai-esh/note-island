@@ -52,7 +52,7 @@ struct TranslatorView: View {
             }
         }
         .padding(16)
-        .frame(width: 560, height: 330)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var toolbar: some View {

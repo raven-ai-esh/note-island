@@ -493,7 +493,6 @@ final class NoteStoreTests: XCTestCase {
 
     func testPanelFrameAttachesToFullTopEdgeOfEveryConnectedScreen() {
         XCTAssertFalse(NSScreen.screens.isEmpty)
-        let size = NSSize(width: 560, height: 388)
         let panel = IslandPanel(
             contentRect: .zero,
             styleMask: [.borderless],
@@ -501,12 +500,60 @@ final class NoteStoreTests: XCTestCase {
             defer: false
         )
         for screen in NSScreen.screens {
-            let frame = IslandScreenGeometry.frame(screenFrame: screen.frame, size: size)
-            panel.setFrame(frame, display: false)
-            XCTAssertEqual(panel.frame.maxY, screen.frame.maxY, accuracy: 0.001)
-            XCTAssertEqual(panel.frame.midX, screen.frame.midX, accuracy: 0.001)
-            XCTAssertEqual(panel.screen?.frame, screen.frame)
+            for height: CGFloat in [280, 388, 620] {
+                let size = NSSize(width: 560, height: height)
+                let frame = IslandScreenGeometry.frame(screenFrame: screen.frame, size: size)
+                panel.setFrame(frame, display: false)
+                XCTAssertEqual(panel.frame.maxY, screen.frame.maxY, accuracy: 0.001)
+                XCTAssertEqual(panel.frame.midX, screen.frame.midX, accuracy: 0.001)
+                XCTAssertEqual(panel.screen?.frame, screen.frame)
+            }
         }
+    }
+
+    func testExpandedHeightTracksVerticalDragInBothDirections() {
+        XCTAssertEqual(
+            IslandExpandedGeometry.height(
+                startingAt: 388,
+                verticalTranslation: 120,
+                maximumHeight: 900
+            ),
+            508
+        )
+        XCTAssertEqual(
+            IslandExpandedGeometry.height(
+                startingAt: 388,
+                verticalTranslation: -80,
+                maximumHeight: 900
+            ),
+            308
+        )
+    }
+
+    func testExpandedHeightClampsToSafeMinimumAndVisibleScreenBottom() {
+        XCTAssertEqual(
+            IslandExpandedGeometry.height(
+                startingAt: 388,
+                verticalTranslation: -400,
+                maximumHeight: 900
+            ),
+            IslandExpandedGeometry.minimumHeight
+        )
+        XCTAssertEqual(
+            IslandExpandedGeometry.height(
+                startingAt: 388,
+                verticalTranslation: 800,
+                maximumHeight: 720
+            ),
+            720
+        )
+        XCTAssertEqual(
+            IslandExpandedGeometry.maximumHeight(
+                screenFrame: NSRect(x: 0, y: 0, width: 1440, height: 900),
+                visibleFrame: NSRect(x: 0, y: 60, width: 1440, height: 815)
+            ),
+            840
+        )
     }
 
     func testCompactIslandRendersRoundedBottomCornerAndVisibleLeftDot() throws {

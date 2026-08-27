@@ -10,8 +10,33 @@ struct IslandView: View {
     @ObservedObject var screenshots: ScreenshotsStore
     @ObservedObject var presentation: IslandPresentationState
     @State private var isEditingBody = false
+    @State private var resizeStartHeight: CGFloat?
+    @State private var isResizeHandleHovered = false
     let setExpanded: (Bool) -> Void
     let dismiss: () -> Void
+    let setExpandedHeight: (CGFloat) -> Void
+
+    init(
+        store: NoteStore,
+        translator: TranslatorStore,
+        meetings: MeetingsStore,
+        recordings: RecordingsStore,
+        screenshots: ScreenshotsStore,
+        presentation: IslandPresentationState,
+        setExpanded: @escaping (Bool) -> Void,
+        dismiss: @escaping () -> Void,
+        setExpandedHeight: @escaping (CGFloat) -> Void = { _ in }
+    ) {
+        self.store = store
+        self.translator = translator
+        self.meetings = meetings
+        self.recordings = recordings
+        self.screenshots = screenshots
+        self.presentation = presentation
+        self.setExpanded = setExpanded
+        self.dismiss = dismiss
+        self.setExpandedHeight = setExpandedHeight
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,9 +124,66 @@ struct IslandView: View {
                     ScreenshotsView(screenshots: screenshots)
                 }
             }
-            .frame(height: 330)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 560)
+        .frame(width: 560, height: presentation.expandedHeight)
+        .overlay(alignment: .bottom) {
+            resizeHandle
+        }
+    }
+
+    private var resizeHandle: some View {
+        Color.clear
+            .frame(width: 104, height: 18)
+            .overlay {
+                Capsule()
+                    .fill(Color.white.opacity(isResizeHandleHovered ? 0.42 : 0.24))
+                    .frame(width: 42, height: 3)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { value in
+                        if resizeStartHeight == nil {
+                            resizeStartHeight = presentation.expandedHeight
+                        }
+                        setExpandedHeight(
+                            (resizeStartHeight ?? presentation.expandedHeight) + value.translation.height
+                        )
+                    }
+                    .onEnded { _ in
+                        resizeStartHeight = nil
+                    }
+            )
+            .onHover { isHovering in
+                guard isResizeHandleHovered != isHovering else { return }
+                isResizeHandleHovered = isHovering
+                if isHovering {
+                    NSCursor.resizeUpDown.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .onDisappear {
+                if isResizeHandleHovered {
+                    NSCursor.pop()
+                    isResizeHandleHovered = false
+                }
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Изменить высоту окна")
+            .accessibilityValue("\(Int(presentation.expandedHeight)) пунктов")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    setExpandedHeight(presentation.expandedHeight + 40)
+                case .decrement:
+                    setExpandedHeight(presentation.expandedHeight - 40)
+                @unknown default:
+                    break
+                }
+            }
+            .help("Потяните вверх или вниз, чтобы изменить высоту")
     }
 
     private var header: some View {
