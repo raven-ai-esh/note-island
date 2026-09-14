@@ -2,6 +2,31 @@
 
 Нативный Note Island для macOS: компактная панель у верхнего края экрана раскрывается в заметки, переводчик, календарь, записи и скриншоты.
 
+## Интерфейс
+
+<p align="center">
+  <img src="docs/screenshots/notes.png" alt="Заметки Note Island с Markdown и задачами" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <strong>Быстрый перевод</strong><br><br>
+      <img src="docs/screenshots/translator.png" alt="Встроенный переводчик Note Island">
+    </td>
+    <td width="50%">
+      <strong>Встречи на сегодня</strong><br><br>
+      <img src="docs/screenshots/meetings.png" alt="События Apple Calendar в Note Island">
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <strong>История скриншотов</strong><br><br>
+      <img src="docs/screenshots/screenshots.png" alt="Галерея скриншотов Note Island">
+    </td>
+  </tr>
+</table>
+
 ## Запуск
 
 ```bash
