@@ -100,6 +100,9 @@ enum MeetingActionContent {
 struct MeetingsView: View {
     @ObservedObject var meetings: MeetingsStore
     @State private var expandedMeetingIDs: Set<String>
+    @State private var editingDraft: MeetingDraft?
+    @State private var deletionCandidate: MeetingItem?
+    @State private var actionError: String?
     private let actions: any MeetingActionProviding
 
     init(
@@ -116,6 +119,19 @@ struct MeetingsView: View {
         VStack(spacing: 0) {
             meetingsHeader
             Divider().overlay(Color.white.opacity(0.08))
+            if let error = actionError ?? (editingDraft == nil ? meetings.mutationError : nil) {
+                HStack(spacing: 8) {
+                    Text(error).font(.system(size: 11)).foregroundStyle(NoteColor.peach.color)
+                    Spacer()
+                    Button {
+                        actionError = nil
+                        meetings.dismissMutationError()
+                    } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Закрыть ошибку встречи")
+                }
+                .padding(12)
+            }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -126,6 +142,19 @@ struct MeetingsView: View {
         }
         .onDisappear { meetings.deactivate() }
         .foregroundStyle(.white)
+        .sheet(item: $editingDraft) { draft in
+            MeetingEditorView(draft: draft, meetings: meetings)
+        }
+        .alert("Удалить встречу?", isPresented: Binding(
+            get: { deletionCandidate != nil },
+            set: { if !$0 { deletionCandidate = nil } }
+        ), presenting: deletionCandidate) { meeting in
+            Button("Удалить", role: .destructive) { meetings.deleteMeeting(meeting) }
+            Button("Отмена", role: .cancel) {}
+        } message: { meeting in
+            Text("«\(meeting.title)» будет удалена из календаря."
+                 + (meeting.isRecurring ? " Остальные повторения сохранятся." : ""))
+        }
     }
 
     private var meetingsHeader: some View {
@@ -143,6 +172,18 @@ struct MeetingsView: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(IslandTheme.secondary)
             }
+            Button {
+                do {
+                    actionError = nil
+                    editingDraft = try meetings.newMeetingDraft()
+                } catch { actionError = error.localizedDescription }
+            } label: {
+                Image(systemName: "plus").frame(width: 26, height: 26)
+            }
+            .buttonStyle(IslandIconButtonStyle())
+            .disabled(meetings.state != .ready)
+            .accessibilityLabel("Создать встречу")
+            .help("Создать встречу в Apple Calendar")
             Button {
                 if meetings.notificationState == .denied {
                     meetings.refreshNotificationAuthorization(
@@ -244,14 +285,14 @@ struct MeetingsView: View {
             statusState(
                 icon: "calendar.badge.clock",
                 title: "Доступ к Apple Calendar",
-                message: "Для чтения встреч EventKit требует Full Access. Note Island только показывает события и никогда их не изменяет.",
+                message: "Разрешите доступ, чтобы просматривать встречи и сохранять ваши изменения в Apple Calendar.",
                 loading: true
             )
         } else {
             statusState(
                 icon: "calendar.badge.clock",
                 title: "Доступ к Apple Calendar",
-                message: "Для чтения встреч EventKit требует Full Access. Note Island только показывает события и никогда их не изменяет.",
+                message: "Разрешите доступ, чтобы просматривать встречи и сохранять ваши изменения в Apple Calendar.",
                 actionTitle: "Разрешить",
                 action: { meetings.requestAuthorization() }
             )
@@ -278,7 +319,14 @@ struct MeetingsView: View {
                             expanded: expandedMeetingIDs.contains(meeting.id),
                             actions: actions,
                             now: context.date,
-                            toggleAction: { toggleDetails(for: meeting.id) }
+                            toggleAction: { toggleDetails(for: meeting.id) },
+                            editAction: {
+                                do {
+                                    actionError = nil
+                                    editingDraft = try meetings.editingDraft(for: meeting)
+                                } catch { actionError = error.localizedDescription }
+                            },
+                            deleteAction: { deletionCandidate = meeting }
                         )
                     }
                 }
@@ -357,19 +405,25 @@ struct MeetingRow: View {
     let actions: any MeetingActionProviding
     let now: Date
     let toggleAction: () -> Void
+    let editAction: (() -> Void)?
+    let deleteAction: (() -> Void)?
 
     init(
         meeting: MeetingItem,
         expanded: Bool,
         actions: any MeetingActionProviding,
         now: Date = Date(),
-        toggleAction: @escaping () -> Void
+        toggleAction: @escaping () -> Void,
+        editAction: (() -> Void)? = nil,
+        deleteAction: (() -> Void)? = nil
     ) {
         self.meeting = meeting
         self.expanded = expanded
         self.actions = actions
         self.now = now
         self.toggleAction = toggleAction
+        self.editAction = editAction
+        self.deleteAction = deleteAction
     }
 
     var body: some View {
@@ -565,6 +619,15 @@ struct MeetingRow: View {
 
     @ViewBuilder
     private var contextActions: some View {
+        if meeting.canEdit {
+            if let editAction {
+                Button(action: editAction) { Label("Изменить…", systemImage: "pencil") }
+            }
+            if let deleteAction {
+                Button(role: .destructive, action: deleteAction) { Label("Удалить…", systemImage: "trash") }
+            }
+            if editAction != nil || deleteAction != nil { Divider() }
+        }
         ForEach(MeetingMenuAction.available(for: meeting)) { action in
             Button { perform(action) } label: {
                 Label(action.title(expanded: expanded), systemImage: action.symbol)

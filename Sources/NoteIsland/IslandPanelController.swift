@@ -51,15 +51,26 @@ final class IslandPresentationState: ObservableObject {
     @Published var expandedHeight: CGFloat = IslandExpandedGeometry.defaultHeight
     @Published var bodyFocusRequestID = 0
     @Published var mode: IslandMode
+    @Published private(set) var isPanelPinned: Bool
+    private let defaults: UserDefaults
 
-    init() {
-        mode = IslandMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "notes") ?? .notes
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        mode = IslandMode(rawValue: defaults.string(forKey: "island.mode") ?? "notes") ?? .notes
+        isPanelPinned = defaults.bool(forKey: "island.panelPinned")
+    }
+
+    var shouldAutomaticallyCollapse: Bool { isExpanded && !isPanelPinned }
+
+    func togglePanelPin() {
+        isPanelPinned.toggle()
+        defaults.set(isPanelPinned, forKey: "island.panelPinned")
     }
 
     func selectMode(_ newMode: IslandMode) {
         guard mode != newMode else { return }
         mode = newMode
-        UserDefaults.standard.set(newMode.rawValue, forKey: "island.mode")
+        defaults.set(newMode.rawValue, forKey: "island.mode")
         bodyFocusRequestID &+= 1
     }
 }
@@ -82,6 +93,8 @@ final class IslandPanelController: NSObject {
     private var hotKeyHandler: EventHandlerRef?
     private var activationObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
+    private var outsideClickMonitor: IslandOutsideClickMonitor?
+    private var pendingOutsideCollapse = false
     var onVisibilityChanged: ((Bool) -> Void)?
 
     override init() {
@@ -105,6 +118,11 @@ final class IslandPanelController: NSObject {
         observePanelScreenChanges()
         configureContent()
         observeExternalApplications()
+        outsideClickMonitor = IslandOutsideClickMonitor(
+            panel: panel,
+            shouldCollapse: { [weak self] in self?.presentation.shouldAutomaticallyCollapse ?? false },
+            collapse: { [weak self] in self?.collapseForOutsideClick() }
+        )
         registerHotKey()
     }
 
@@ -190,11 +208,11 @@ final class IslandPanelController: NSObject {
         hostingView.autoresizingMask = [.width, .height]
     }
 
-    private func setExpanded(_ newValue: Bool) {
+    private func setExpanded(_ newValue: Bool, restoreFocus: Bool = true) {
         guard expanded != newValue, !isTransitioning else { return }
         expanded = newValue
         isTransitioning = true
-        updateScreenContext()
+        updateScreenContext(preferredScreen: newValue ? nil : currentScreen)
         presentation.isWindowExpanded = newValue
 
         if newValue {
@@ -202,7 +220,7 @@ final class IslandPanelController: NSObject {
             presentation.isExpanded = true
             presentation.editorOpacity = 0
             resize(animated: true) { [weak self] in
-                self?.isTransitioning = false
+                self?.finishTransition()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
                 guard let self, self.expanded else { return }
@@ -212,7 +230,7 @@ final class IslandPanelController: NSObject {
             presentation.editorOpacity = 0
             presentation.isExpanded = false
             resize(animated: true) { [weak self] in
-                self?.isTransitioning = false
+                self?.finishTransition()
             }
         }
         presentPanel()
@@ -221,8 +239,28 @@ final class IslandPanelController: NSObject {
                 guard let self, self.expanded else { return }
                 self.presentation.bodyFocusRequestID &+= 1
             }
-        } else {
+        } else if restoreFocus {
             releaseKeyboardFocus()
+        } else {
+            panel.makeFirstResponder(nil)
+            panel.resignKey()
+        }
+    }
+
+    private func collapseForOutsideClick() {
+        guard presentation.shouldAutomaticallyCollapse else { return }
+        if isTransitioning {
+            pendingOutsideCollapse = true
+        } else {
+            setExpanded(false, restoreFocus: false)
+        }
+    }
+
+    private func finishTransition() {
+        isTransitioning = false
+        if pendingOutsideCollapse {
+            pendingOutsideCollapse = false
+            collapseForOutsideClick()
         }
     }
 

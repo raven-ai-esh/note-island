@@ -37,6 +37,11 @@ struct MeetingItem: Identifiable, Equatable, Sendable {
     let notes: String?
     let organizer: MeetingParticipant?
     let participants: [MeetingParticipant]
+    let calendarID: String?
+    let canEdit: Bool
+    let isRecurring: Bool
+    let lastModifiedDate: Date?
+    let storedURL: URL?
 
     init(
         id: String,
@@ -50,7 +55,12 @@ struct MeetingItem: Identifiable, Equatable, Sendable {
         url: URL? = nil,
         notes: String? = nil,
         organizer: MeetingParticipant? = nil,
-        participants: [MeetingParticipant] = []
+        participants: [MeetingParticipant] = [],
+        calendarID: String? = nil,
+        canEdit: Bool = false,
+        isRecurring: Bool = false,
+        lastModifiedDate: Date? = nil,
+        storedURL: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -64,6 +74,11 @@ struct MeetingItem: Identifiable, Equatable, Sendable {
         self.notes = notes
         self.organizer = organizer
         self.participants = participants
+        self.calendarID = calendarID
+        self.canEdit = canEdit
+        self.isRecurring = isRecurring
+        self.lastModifiedDate = lastModifiedDate
+        self.storedURL = storedURL
     }
 
     var hasExtendedDetails: Bool {
@@ -164,15 +179,22 @@ protocol CalendarEventProviding: AnyObject {
     func requestFullAccess(completion: @escaping (Result<Bool, Error>) -> Void)
     func events(from startDate: Date, through endDate: Date) throws -> [MeetingItem]
     func observeChanges(_ handler: @escaping () -> Void)
+    func calendarsForEditing() throws -> [MeetingCalendar]
+    func saveMeeting(_ draft: MeetingDraft) throws
+    func deleteMeeting(_ meeting: MeetingItem) throws
 }
 
 @MainActor
 final class EventKitCalendarProvider: NSObject, CalendarEventProviding {
-    private let eventStore: EKEventStore
+    let eventStore: EKEventStore
     private var changeHandler: (() -> Void)?
 
-    override init() {
-        eventStore = EKEventStore()
+    override convenience init() {
+        self.init(eventStore: EKEventStore())
+    }
+
+    init(eventStore: EKEventStore) {
+        self.eventStore = eventStore
         super.init()
         NotificationCenter.default.addObserver(
             self,
@@ -238,7 +260,8 @@ final class EventKitCalendarProvider: NSObject, CalendarEventProviding {
 
     static func meetingItem(from event: EKEvent) -> MeetingItem {
         let color: MeetingColor
-        if let converted = NSColor(cgColor: event.calendar.cgColor)?.usingColorSpace(.deviceRGB) {
+        if let cgColor = event.calendar.cgColor,
+           let converted = NSColor(cgColor: cgColor)?.usingColorSpace(.deviceRGB) {
             color = MeetingColor(
                 red: Double(converted.redComponent),
                 green: Double(converted.greenComponent),
@@ -261,7 +284,7 @@ final class EventKitCalendarProvider: NSObject, CalendarEventProviding {
             id: occurrenceID,
             title: event.title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "Без названия",
             startDate: event.startDate,
-            endDate: event.endDate,
+            endDate: MeetingDateRange.exclusiveEnd(event.endDate, isAllDay: event.isAllDay),
             isAllDay: event.isAllDay,
             location: location,
             calendarTitle: event.calendar.title,
@@ -269,7 +292,12 @@ final class EventKitCalendarProvider: NSObject, CalendarEventProviding {
             url: MeetingLinkExtractor.firstWebURL(explicitURL: event.url, notes: notes, location: location),
             notes: notes,
             organizer: organizer,
-            participants: participants
+            participants: participants,
+            calendarID: event.calendar.calendarIdentifier,
+            canEdit: event.calendar.allowsContentModifications,
+            isRecurring: event.hasRecurrenceRules || event.isDetached,
+            lastModifiedDate: event.lastModifiedDate,
+            storedURL: event.url
         )
     }
 
@@ -323,6 +351,8 @@ final class MeetingsStore: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var notificationsEnabled: Bool
     @Published private(set) var notificationState: MeetingNotificationState
+    @Published private(set) var mutationError: String?
+    @Published private(set) var isMutating = false
 
     private let provider: CalendarEventProviding
     private let calendar: Calendar
@@ -380,6 +410,69 @@ final class MeetingsStore: ObservableObject {
 
     func refresh() {
         load(requestAccessIfNeeded: false)
+    }
+
+    var canCreateMeetings: Bool {
+        provider.accessState == .authorized && !((try? provider.calendarsForEditing()) ?? []).isEmpty
+    }
+
+    func editableCalendars() throws -> [MeetingCalendar] {
+        guard provider.accessState == .authorized else { throw MeetingEditingError.permissionDenied }
+        return try provider.calendarsForEditing()
+    }
+
+    func newMeetingDraft() throws -> MeetingDraft {
+        guard let calendar = try editableCalendars().first else { throw MeetingEditingError.noWritableCalendar }
+        mutationError = nil
+        return MeetingDraft(calendarID: calendar.id, now: now())
+    }
+
+    func editingDraft(for meeting: MeetingItem) throws -> MeetingDraft {
+        guard provider.accessState == .authorized else { throw MeetingEditingError.permissionDenied }
+        guard meeting.canEdit else { throw MeetingEditingError.readOnly }
+        mutationError = nil
+        return MeetingDraft(meeting: meeting)
+    }
+
+    func dismissMutationError() { mutationError = nil }
+
+    @discardableResult
+    func saveMeeting(_ draft: MeetingDraft) -> Bool {
+        performMutation {
+            let validated = try draft.validated(calendar: calendar)
+            guard try editableCalendars().contains(where: { $0.id == validated.calendarID }) else {
+                throw MeetingEditingError.readOnly
+            }
+            try provider.saveMeeting(validated)
+        }
+    }
+
+    @discardableResult
+    func deleteMeeting(_ meeting: MeetingItem) -> Bool {
+        performMutation {
+            guard meeting.canEdit else { throw MeetingEditingError.readOnly }
+            try provider.deleteMeeting(meeting)
+        }
+    }
+
+    private func performMutation(_ operation: () throws -> Void) -> Bool {
+        guard !isMutating else { return false }
+        guard provider.accessState == .authorized else {
+            mutationError = MeetingEditingError.permissionDenied.localizedDescription
+            return false
+        }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try operation()
+            mutationError = nil
+            refresh()
+            if !isActive && notificationsEnabled { synchronizeScheduledNotifications() }
+            return true
+        } catch {
+            mutationError = error.localizedDescription
+            return false
+        }
     }
 
     func toggleNotifications() {
@@ -458,8 +551,9 @@ final class MeetingsStore: ObservableObject {
         }
     }
 
-    private func fetchToday(now: Date = Date()) {
+    private func fetchToday() {
         guard !isLoading else { return }
+        let now = now()
         isLoading = true
         state = .loading
         let start = calendar.startOfDay(for: now)

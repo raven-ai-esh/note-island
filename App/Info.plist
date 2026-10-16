@@ -27,7 +27,7 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Note Island показывает ваши встречи на сегодня. Приложение не создаёт, не изменяет и не удаляет события календаря.</string>
+    <string>Note Island показывает встречи и по вашему действию создаёт, изменяет и удаляет события в Apple Calendar.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Note Island использует микрофон только во время запущенной вами аудио- или экранной записи.</string>
     <key>NSAudioCaptureUsageDescription</key>

@@ -235,6 +235,17 @@ struct IslandView: View {
             .buttonStyle(IslandIconButtonStyle())
             .accessibilityLabel("Свернуть")
 
+            Button {
+                presentation.togglePanelPin()
+            } label: {
+                Image(systemName: presentation.isPanelPinned ? "pin.fill" : "pin")
+                    .foregroundStyle(presentation.isPanelPinned ? NoteColor.lilac.color : .white)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(IslandIconButtonStyle())
+            .accessibilityLabel(presentation.isPanelPinned ? "Открепить панель" : "Закрепить панель")
+            .help(presentation.isPanelPinned ? "Панель остаётся открытой при клике снаружи" : "Закрепить панель поверх окон")
+
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .frame(width: 26, height: 26)
