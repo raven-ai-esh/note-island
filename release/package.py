@@ -42,7 +42,9 @@ def verify(app, config):
         actual=set(output(['lipo','-archs',binary]).split())
         if actual!=set(config['architectures']):
             raise RuntimeError(f'{name} architecture mismatch: {actual}')
-        libraries='\n'.join(output(['otool','-L',binary]).splitlines()[1:])
+        # Universal Mach-O emits a separate, unindented path header per slice.
+        # Inspect dependency lines only, never the inspected binary's own path.
+        libraries='\n'.join(line for line in output(['otool','-L',binary]).splitlines() if line[:1].isspace())
         if any(str(x) in libraries for x in [Path.home(),ROOT,'/private/tmp/']):
             raise RuntimeError(f'{name} links a developer-local library')
     for relative in config['required_resources']:
