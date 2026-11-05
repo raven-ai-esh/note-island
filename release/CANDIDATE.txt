@@ -1,0 +1,11 @@
+Note Island — LOCAL RELEASE CANDIDATE
+
+This archive is for local packaging and runtime checks. It is ad-hoc signed,
+not notarized, and is not a public installer. Do not publish it as a normal
+download or instruct users to disable Gatekeeper.
+
+Public release requires Developer ID Application, successful Apple notarization
+and stapling. The package script enforces that boundary in --mode release.
+See release/README.md and release/INSTALL.txt for the distribution workflow.
+
+Never include personal notes, calendar data, credentials or model caches in a release.

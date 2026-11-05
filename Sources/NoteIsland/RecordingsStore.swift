@@ -584,8 +584,7 @@ final class RecordingsStore: ObservableObject {
     }
 
     private static var defaultDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("NoteIsland/Recordings", isDirectory: true)
+        NoteIslandPaths.directory.appendingPathComponent("Recordings", isDirectory: true)
     }
 
     private static func moveToTrash(_ url: URL) throws {

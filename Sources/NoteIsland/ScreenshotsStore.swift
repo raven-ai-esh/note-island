@@ -200,8 +200,7 @@ final class SystemScreenshotLibrary: ScreenshotLibraryProviding {
     }
 
     static var defaultDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("NoteIsland/Screenshots", isDirectory: true)
+        NoteIslandPaths.directory.appendingPathComponent("Screenshots", isDirectory: true)
     }
 }
 
@@ -252,7 +251,7 @@ final class ScreenshotsStore: ObservableObject {
         self.fileRevealer = fileRevealer
         lastPasteboardChange = pasteboard.changeCount
         reload()
-        startClipboardMonitoring()
+        if !NoteIslandPaths.isAcceptance { startClipboardMonitoring() }
     }
 
     var selectedScreenshot: ScreenshotItem? {

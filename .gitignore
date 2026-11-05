@@ -1,6 +1,8 @@
 .build/
 .swiftpm/
 dist/
+artifacts/
+__pycache__/
 .DS_Store
 *.xcuserstate
 .env

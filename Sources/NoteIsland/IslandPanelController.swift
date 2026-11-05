@@ -123,7 +123,7 @@ final class IslandPanelController: NSObject {
             shouldCollapse: { [weak self] in self?.presentation.shouldAutomaticallyCollapse ?? false },
             collapse: { [weak self] in self?.collapseForOutsideClick() }
         )
-        registerHotKey()
+        if !NoteIslandPaths.isAcceptance { registerHotKey() }
     }
 
     func show(expanded: Bool? = nil) {
