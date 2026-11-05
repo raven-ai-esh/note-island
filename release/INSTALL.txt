@@ -1,0 +1,26 @@
+Note Island 0.1.0 — macOS 15+, Apple Silicon and Intel
+
+Public binaries must be Developer ID signed and notarized. A file labelled
+candidate is for local QA and is not the public installer.
+
+1. Download the DMG from https://github.com/raven-ai-esh/note-island/releases.
+2. Open it and drag Note Island.app to Applications. Quit the older app before replacing.
+3. Open Note Island from Applications; use its note icon in the menu bar.
+4. Open Notes and create a note. Notes save automatically.
+
+Shortcuts: Command-Shift-N notes; Command-Shift-T translator;
+Command-Shift-M meetings; Command-Shift-R recordings; Command-Shift-S screenshots.
+
+Permissions are requested when the corresponding feature needs them:
+- Calendar Full Access to read/create/edit events. Changes affect Apple Calendar.
+- Microphone/screen/system audio permissions for recordings you start.
+- Apple Translation language download on first use; no API key required.
+Google Cloud and DeepL are optional and require your own API key in Keychain.
+
+Data lives separately in ~/Library/Application Support/NoteIsland.
+Updating or removing the app does not erase that folder. Back it up before updating.
+Screenshot history watches images copied to the clipboard while the app runs.
+The application interface is currently Russian. The notes panel works without a notch.
+
+Compare the download with SHA256SUMS for the same release. Source ZIP and license
+are included. Installation feedback: https://github.com/raven-ai-esh/note-island/issues.

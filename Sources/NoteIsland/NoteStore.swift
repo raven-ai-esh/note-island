@@ -108,8 +108,6 @@ final class NoteStore: ObservableObject {
     }
 
     nonisolated private static func defaultPersistenceURL() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("NoteIsland", isDirectory: true)
-            .appendingPathComponent("notes.json")
+        NoteIslandPaths.directory.appendingPathComponent("notes.json")
     }
 }

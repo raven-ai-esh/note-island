@@ -1,0 +1,24 @@
+{
+  "name": "Note Island",
+  "product": "NoteIsland",
+  "app_name": "Note Island.app",
+  "bundle_id": "dev.raven.note-island",
+  "version": "0.1.0",
+  "build": "1",
+  "minimum_macos": "15.0",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "builder": "swift",
+  "executables": [
+    "NoteIsland"
+  ],
+  "entitlements": "App/NoteIsland.entitlements",
+  "info_plist": "App/Info.plist",
+  "icon": "App/NoteIsland.icns",
+  "required_resources": [
+    "Resources/NoteIsland.icns",
+    "Resources/ThirdParty"
+  ]
+}
